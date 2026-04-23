@@ -4,3 +4,5 @@ __pycache__/
 *.xls
 .DS_Store
 Thumbs.db
+.pytest_tmp/
+.test_tmp/

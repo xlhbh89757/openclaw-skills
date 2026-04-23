@@ -65,6 +65,64 @@ def risk_summary(risks):
     ) or '无明显风险点'
 
 
+def risk_bucket():
+    return {"level": "低", "flags": [], "evidence": []}
+
+
+def add_risk(risks, dimension, level, flag, evidence=""):
+    current = risks[dimension]["level"]
+    if RISK_LEVELS.index(level) > RISK_LEVELS.index(current):
+        risks[dimension]["level"] = level
+    risks[dimension]["flags"].append(flag)
+    risks[dimension].setdefault("evidence", []).append((evidence or "")[:500])
+
+
+def matching_evidence(text, patterns, limit=3):
+    if not text:
+        return ""
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines() if line.strip()]
+    evidence = []
+    for line in lines:
+        if any(re.search(pattern, line, re.IGNORECASE) for pattern in patterns):
+            evidence.append(line[:180])
+            if len(evidence) >= limit:
+                break
+    return " | ".join(evidence)
+
+
+def assess_parse_quality(parsed):
+    warnings = []
+    raw_text = parsed.get("raw_text", "")
+    work_count = len(parsed.get("work_experience", []))
+    project_count = len(parsed.get("project_experience", []))
+    education_count = len(parsed.get("education", []))
+
+    if len(raw_text) < 300:
+        warnings.append("文本抽取内容较短")
+    if work_count == 0:
+        warnings.append("未识别到工作经历")
+    if education_count == 0:
+        warnings.append("未识别到教育经历")
+    if "项目经历" in raw_text and project_count == 0:
+        warnings.append("项目经历标题存在但未成功分区")
+
+    if len(warnings) >= 2:
+        quality = "较差"
+    elif warnings:
+        quality = "需复核"
+    else:
+        quality = "正常"
+
+    return {
+        "quality": quality,
+        "warnings": warnings,
+        "text_length": len(raw_text),
+        "work_experience_count": work_count,
+        "project_experience_count": project_count,
+        "education_count": education_count,
+    }
+
+
 def score_extracted_text(text):
     """Score extracted PDF text and prefer the cleaner structured variant."""
     if not text or not text.strip():
@@ -148,7 +206,7 @@ def parse_date_token(token):
 
 def extract_date_ranges(lines):
     pattern = re.compile(
-        r"(\d{4}(?:[./-]\d{1,2})?)\s*(?:--|-|-|-|~|\u81f3)\s*(\d{4}(?:[./-]\d{1,2})?|\u81f3\u4eca|\u73b0\u5728)"
+        r"(\d{4}(?:[./-]\d{1,2})?)\s*(?:--|—|–|-|~|\u81f3)\s*(\d{4}(?:[./-]\d{1,2})?|\u81f3\u4eca|\u73b0\u5728)"
     )
     ranges = []
     for line in lines:
@@ -346,7 +404,7 @@ def parse_resume(text, input_name=None, filename=None):
     )
     education_keywords = ("大学", "学院", "学校", "本科", "硕士", "博士", "大专", "中专", "研究生")
     date_range_pattern = re.compile(
-        r"\d{4}(?:[./-]\d{1,2})?\s*(?:--|-|-|-|~|至)\s*(?:\d{4}(?:[./-]\d{1,2})?|至今|现在)"
+        r"\d{4}(?:[./-]\d{1,2})?\s*(?:--|—|–|-|~|至)\s*(?:\d{4}(?:[./-]\d{1,2})?|至今|现在)"
     )
     education_lines = []
     for line in education_section or lines:
@@ -388,6 +446,7 @@ def parse_resume(text, input_name=None, filename=None):
         if len(line) <= 120:
             skill_lines.append(line[:120])
     result["skills"] = list(dict.fromkeys(skill_lines))
+    result["parse_quality"] = assess_parse_quality(result)
 
     return result
 
@@ -519,13 +578,13 @@ def analyze_risk(resume_data):
 def analyze_risk(resume_data):
     """Analyze resume risk with section-aware rules to reduce false positives."""
     risks = {
-        "education": {"level": "低", "flags": []},
-        "work_experience": {"level": "低", "flags": []},
-        "timeline": {"level": "低", "flags": []},
-        "salary": {"level": "低", "flags": []},
-        "skill_exaggeration": {"level": "低", "flags": []},
-        "vague_language": {"level": "低", "flags": []},
-        "professional_match": {"level": "低", "flags": []},
+        "education": risk_bucket(),
+        "work_experience": risk_bucket(),
+        "timeline": risk_bucket(),
+        "salary": risk_bucket(),
+        "skill_exaggeration": risk_bucket(),
+        "vague_language": risk_bucket(),
+        "professional_match": risk_bucket(),
     }
 
     text = resume_data.get("clean_text", "")
@@ -535,17 +594,23 @@ def analyze_risk(resume_data):
     edu = resume_data.get("education", [])
     skills = resume_data.get("skills", [])
     name = resume_data.get("name", "")
+    parse_quality = resume_data.get("parse_quality") or assess_parse_quality(resume_data)
 
     non_cs_majors = ["会计", "财务", "市场", "营销", "材料", "高分子", "工艺", "工商"]
     cs_majors = ["计算机", "软件", "信息", "大数据", "统计", "数学"]
     edu_text = " ".join(edu)
     for major in non_cs_majors:
         if major in text[:500] or major in edu_text[:400]:
-            risks["professional_match"]["level"] = "中"
-            risks["professional_match"]["flags"].append(f'学历专业含"{major}",与数据开发岗位关联度偏低')
+            add_risk(
+                risks,
+                "professional_match",
+                "中",
+                f'学历专业含"{major}",与数据开发岗位关联度偏低',
+                matching_evidence(raw_text, [major]) or edu_text[:180],
+            )
             break
     if any(major in text[:500] or major in edu_text[:400] for major in cs_majors):
-        risks["professional_match"] = {"level": "低", "flags": []}
+        risks["professional_match"] = risk_bucket()
 
     work_ranges = extract_date_ranges(work_exp)
     if len(work_ranges) >= 2:
@@ -554,8 +619,7 @@ def analyze_risk(resume_data):
         for start, end, line in ordered_ranges[1:]:
             overlap = latest_end - start
             if overlap >= 3:
-                risks["timeline"]["level"] = "中"
-                risks["timeline"]["flags"].append(f"工作时间段可能重叠:{line[:60]}")
+                add_risk(risks, "timeline", "中", f"工作时间段可能重叠:{line[:60]}", line)
                 break
             latest_end = max(latest_end, end)
 
@@ -565,15 +629,20 @@ def analyze_risk(resume_data):
     ]
     vague_text = "\n".join(work_exp) if work_exp else pre_project_text
     for pattern, message in vague_patterns:
-        if re.search(pattern, vague_text):
-            risks["vague_language"]["level"] = "中"
-            risks["vague_language"]["flags"].append(message)
+        match = re.search(pattern, vague_text)
+        if match:
+            add_risk(risks, "vague_language", "中", message, matching_evidence(vague_text, [pattern]) or match.group(0))
             break
 
     perfect_numbers = re.findall(r"(?:100%|99%|98%|97%|96%|95%|增长至?\s*\d+%|提升至?\s*\d+%)", text)
     if len(perfect_numbers) > 3:
-        risks["skill_exaggeration"]["level"] = "中"
-        risks["skill_exaggeration"]["flags"].append(f"简历含 {len(perfect_numbers)} 处过于完美的数字表达")
+        add_risk(
+            risks,
+            "skill_exaggeration",
+            "中",
+            f"简历含 {len(perfect_numbers)} 处过于完美的数字表达",
+            matching_evidence(raw_text, perfect_numbers[:5]),
+        )
 
     # ── 技能夸大分析（v4: 上下文感知，避免误判）──
     # 不再简单统计关键词次数，而是结合工作年限、技能与项目匹配度综合判断
@@ -620,35 +689,57 @@ def analyze_risk(resume_data):
 
     # 最终判定
     total_adjusted = adjusted_strong * 2 + adjusted_moderate  # 强词权重x2
+    exaggeration_evidence = matching_evidence(raw_text, exaggeration_strong + exaggeration_moderate)
     if total_adjusted >= 6 and work_years < 3:
-        risks["skill_exaggeration"]["level"] = "高"
-        risks["skill_exaggeration"]["flags"].append(
-            f"{work_years}年经验但技能描述过度自信（强夸大词{strong_count}处，中等词{moderate_count}处）"
+        add_risk(
+            risks,
+            "skill_exaggeration",
+            "高",
+            f"{work_years}年经验但技能描述过度自信（强夸大词{strong_count}处，中等词{moderate_count}处）",
+            exaggeration_evidence,
         )
     elif total_adjusted >= 4 and work_years < 5:
-        risks["skill_exaggeration"]["level"] = "中"
-        risks["skill_exaggeration"]["flags"].append(
-            f"{work_years}年经验，技能措辞偏强（强夸大词{strong_count}处，中等词{moderate_count}处），项目支撑{skill_keywords_in_projects}项技术"
+        add_risk(
+            risks,
+            "skill_exaggeration",
+            "中",
+            f"{work_years}年经验，技能措辞偏强（强夸大词{strong_count}处，中等词{moderate_count}处），项目支撑{skill_keywords_in_projects}项技术",
+            exaggeration_evidence,
         )
     # 其余情况不标记技能夸大（经验足够或措辞适度）
 
     if len(work_exp) == 0:
-        risks["work_experience"]["level"] = "中"
-        risks["work_experience"]["flags"].append("未识别到明确的工作经历时间线")
+        add_risk(
+            risks,
+            "work_experience",
+            "中",
+            "未识别到明确的工作经历时间线",
+            "；".join(parse_quality.get("warnings", [])) or raw_text[:180],
+        )
     elif len(work_ranges) == 0 and len(text) > 1500:
-        risks["work_experience"]["level"] = "中"
-        risks["work_experience"]["flags"].append("工作经历存在,但缺少可识别的时间段")
+        add_risk(
+            risks,
+            "work_experience",
+            "中",
+            "工作经历存在,但缺少可识别的时间段",
+            " | ".join(work_exp[:3]),
+        )
 
     if len(edu) == 0:
-        risks["education"]["level"] = "低"
-        risks["education"]["flags"].append("未识别到明确学历信息,建议人工复核原始简历")
+        add_risk(risks, "education", "低", "未识别到明确学历信息,建议人工复核原始简历", raw_text[:180])
 
     skill_text = " ".join(skills)
     if skill_text and not re.search(r"(sql|python|java|hive|spark|flink|etl|bi|数据)", skill_text, re.IGNORECASE):
         if risks["professional_match"]["level"] == "低":
             risks["professional_match"]["level"] = "中"
         if not risks["professional_match"]["flags"]:
-            risks["professional_match"]["flags"].append("技能区未识别到明显的数据开发关键词")
+            add_risk(
+                risks,
+                "professional_match",
+                "中",
+                "技能区未识别到明显的数据开发关键词",
+                " | ".join(skills[:3]),
+            )
 
     level_to_num = {"低": 0, "中": 1, "高": 2}
     flagged_count = sum(1 for risk in risks.values() if risk["flags"])
@@ -662,6 +753,8 @@ def analyze_risk(resume_data):
 
     return {
         "name": name or "未知",
+        "filename": resume_data.get("filename", ""),
+        "parse_quality": parse_quality,
         "risks": risks,
         "overall": overall,
         "summary": risk_summary(risks),
@@ -676,7 +769,10 @@ def create_excel_report(results, output_path):
     ws1 = wb.active
     ws1.title = '风险总览'
 
-    headers = ['序号', '姓名', '整体风险', '学历', '经历', '时间线', '薪资', '技能夸大', '表述模糊', '专业匹配', '风险点摘要']
+    headers = [
+        '序号', '姓名', '文件名', '文本长度', '解析质量', '整体风险',
+        '学历', '经历', '时间线', '薪资', '技能夸大', '表述模糊', '专业匹配', '风险点摘要'
+    ]
     header_fill = PatternFill('solid', fgColor='4472C4')
     header_font = Font(bold=True, color='FFFFFF')
 
@@ -687,9 +783,13 @@ def create_excel_report(results, output_path):
         cell.alignment = Alignment(horizontal='center', vertical='center')
 
     for idx, r in enumerate(results, 1):
+        parse_quality = r.get('parse_quality', {})
         row = [
             idx,
             r['name'],
+            r.get('filename', ''),
+            parse_quality.get('text_length', ''),
+            parse_quality.get('quality', ''),
             r['overall'],
             r['risks']['education']['level'],
             r['risks']['work_experience']['level'],
@@ -704,11 +804,11 @@ def create_excel_report(results, output_path):
             cell = ws1.cell(row=idx+1, column=col, value=val)
             cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
-            if col in [3, 4, 5, 6, 7, 8, 9, 10] and val in RISK_COLORS:
+            if col in [6, 7, 8, 9, 10, 11, 12, 13] and val in RISK_COLORS:
                 cell.fill = PatternFill('solid', fgColor=RISK_COLORS[val])
                 cell.font = Font(color=RISK_FONTS[val])
 
-    widths = [6, 12, 8, 8, 8, 8, 8, 8, 8, 8, 50]
+    widths = [6, 12, 28, 10, 10, 8, 8, 8, 8, 8, 8, 8, 8, 50]
     for i, w in enumerate(widths, 1):
         ws1.column_dimensions[get_column_letter(i)].width = w
     ws1.row_dimensions[1].height = 25
@@ -716,7 +816,7 @@ def create_excel_report(results, output_path):
     # ── Sheet 2: 详细分析 ─────────────────────────────────────────────────────
     ws2 = wb.create_sheet('详细分析')
 
-    headers2 = ['序号', '姓名', '风险维度', '风险等级', '具体风险点']
+    headers2 = ['序号', '姓名', '风险维度', '风险等级', '具体风险点', '触发原文']
     for col, h in enumerate(headers2, 1):
         cell = ws2.cell(row=1, column=col, value=h)
         cell.fill = header_fill
@@ -727,12 +827,15 @@ def create_excel_report(results, output_path):
     for idx, r in enumerate(results, 1):
         for dim, data in r['risks'].items():
             if data['flags']:
-                for flag in data['flags']:
+                evidence_items = data.get('evidence', [])
+                for flag_index, flag in enumerate(data['flags']):
                     ws2.cell(row=row_num, column=1, value=idx)
                     ws2.cell(row=row_num, column=2, value=r['name'])
                     ws2.cell(row=row_num, column=3, value=RISK_DIMENSION_LABELS.get(dim, dim))
                     ws2.cell(row=row_num, column=4, value=data['level'])
                     ws2.cell(row=row_num, column=5, value=flag)
+                    evidence = evidence_items[flag_index] if flag_index < len(evidence_items) else ''
+                    ws2.cell(row=row_num, column=6, value=evidence)
 
                     cell = ws2.cell(row=row_num, column=4)
                     if data['level'] in RISK_COLORS:
@@ -741,7 +844,7 @@ def create_excel_report(results, output_path):
 
                     row_num += 1
 
-    for i, w in enumerate([6, 12, 15, 8, 60], 1):
+    for i, w in enumerate([6, 12, 15, 8, 60, 80], 1):
         ws2.column_dimensions[get_column_letter(i)].width = w
 
     # ── Sheet 3: 汇总统计 ─────────────────────────────────────────────────────
@@ -881,6 +984,7 @@ def main():
     parser.add_argument('--folder', '-d', help='简历文件夹路径')
     parser.add_argument('--json', '-j', help='JSON格式的简历数据')
     parser.add_argument('--output', '-o', default=None, help='输出文件路径')
+    parser.add_argument('--no-recursive', action='store_true', help='仅扫描指定文件夹,不递归子文件夹')
 
     args = parser.parse_args()
 
@@ -903,7 +1007,7 @@ def main():
         resumes_data = [resume]
 
     elif args.folder:
-        files = scan_resumes_folder(args.folder)
+        files = scan_resumes_folder(args.folder, recursive=not args.no_recursive)
         if not files:
             print(json.dumps({'success': False, 'error': '未找到简历文件'}))
             sys.exit(1)
@@ -958,7 +1062,15 @@ def main():
         'high_risk': len([r for r in results if r['overall'] == '高']),
         'medium_risk': len([r for r in results if r['overall'] == '中']),
         'low_risk': len([r for r in results if r['overall'] == '低']),
-        'details': [{'name': r['name'], 'overall': r['overall'], 'summary': r['summary']} for r in results]
+        'details': [
+            {
+                'name': r['name'],
+                'overall': r['overall'],
+                'summary': r['summary'],
+                'parse_quality': r.get('parse_quality', {}).get('quality'),
+            }
+            for r in results
+        ]
     }
 
     print(json.dumps(output, ensure_ascii=False))

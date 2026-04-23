@@ -24,7 +24,8 @@ description: Use when assessing authenticity risk across one or more resumes fro
 
 ## Inputs
 
-- `--folder` 支持批量处理：`.pdf`、`.docx`、`.doc`、`.xlsx`、`.xls`
+- `--folder` 支持批量处理：`.pdf`、`.docx`、`.doc`、`.xlsx`、`.xls`，默认递归扫描子目录
+- `--no-recursive` 可限制 `--folder` 只扫描当前目录
 - `--file` 当前只明确处理：`.pdf`、`.docx`、`.doc`
 - 也支持从标准输入传入 JSON 数组，每项包含 `text`，可选 `name`
 
@@ -40,6 +41,7 @@ C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_res
 
 ```bash
 python C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_resume_v3.py --folder "C:\Resumes"
+python C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_resume_v3.py --folder "C:\Resumes" --no-recursive
 python C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_resume_v3.py --file "C:\Resumes\candidate.pdf"
 echo '[{"name":"张三","text":"简历正文"}]' | python C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_resume_v3.py
 ```
@@ -49,6 +51,8 @@ echo '[{"name":"张三","text":"简历正文"}]' | python C:\Users\EDY\.openclaw
 - 默认输出文件名：`resume_risk_report.xlsx`
 - 输出位置：命令执行时的当前工作目录
 - 标准输出会返回 JSON，包含 `success`、`output`、`count`、风险分布和候选人摘要
+- Excel「风险总览」包含文件名、文本长度和解析质量，帮助区分真实风险和 PDF 抽取质量问题
+- Excel「详细分析」包含「触发原文」，用于快速复核每个风险点的原文依据
 
 ## Review Guidance
 
@@ -74,4 +78,5 @@ echo '[{"name":"张三","text":"简历正文"}]' | python C:\Users\EDY\.openclaw
 
 ## Changelog
 
+- **v5 (2026-04-23)**：报告新增触发原文证据列、文本长度和解析质量字段；`--folder` 默认递归扫描并支持 `--no-recursive`；风险对象保留 evidence，便于复核和后续系统集成。
 - **v4 (2026-04-23)**：技能夸大判定从简单关键词计数改为上下文感知模式——结合工作年限减免、项目证据支撑度，避免对经验丰富的候选人误判。新增 AI 复核步骤建议。
