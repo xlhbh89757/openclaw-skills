@@ -56,6 +56,23 @@ RISK_DIMENSION_LABELS = {
     'professional_match': '专业匹配',
 }
 
+SECTION_ALIASES = {
+    "教育背景": "education",
+    "教育经历": "education",
+    "工作经历": "work_experience",
+    "任职经历": "work_experience",
+    "工作经验": "work_experience",
+    "项目经历": "project_experience",
+    "项目经验": "project_experience",
+    "专业技能": "skills",
+    "个人技能": "skills",
+    "技术专长": "skills",
+    "技能栈": "skills",
+    "个人优势": "self_summary",
+    "个人评价": "self_summary",
+    "自我评价": "self_summary",
+}
+
 
 def risk_summary(risks):
     return ';'.join(
@@ -123,6 +140,20 @@ def assess_parse_quality(parsed):
     }
 
 
+def compact_heading_text(value):
+    return re.sub(r"[\s:：;；、,，.。/\\|_\-]+", "", (value or "").strip())
+
+
+def normalized_heading(line):
+    compact = compact_heading_text(line)
+    if not compact:
+        return ""
+    for label in SECTION_ALIASES:
+        if compact == compact_heading_text(label):
+            return label
+    return ""
+
+
 def score_extracted_text(text):
     """Score extracted PDF text and prefer the cleaner structured variant."""
     if not text or not text.strip():
@@ -154,34 +185,27 @@ def clean_extracted_text(text):
 
 def looks_like_heading(line):
     normalized = line.strip()
-    if not normalized or len(normalized) > 12:
+    if not normalized or len(normalized) > 20:
         return False
-    return normalized in {
-        "\u6c42\u804c\u610f\u5411",
-        "\u6559\u80b2\u80cc\u666f",
-        "\u6559\u80b2\u7ecf\u5386",
-        "\u5de5\u4f5c\u7ecf\u5386",
-        "\u4e13\u4e1a\u6280\u80fd",
-        "\u9879\u76ee\u7ecf\u5386",
-        "\u4e2a\u4eba\u4f18\u52bf",
-        "\u4e2a\u4eba\u8bc4\u4ef7",
-    }
+    return bool(normalized_heading(normalized))
 
 
 def extract_section_lines(lines, start_keywords, end_keywords):
     collecting = False
     results = []
-    start_set = set(start_keywords)
-    end_set = set(end_keywords)
+    start_set = {compact_heading_text(keyword) for keyword in start_keywords}
+    end_set = {compact_heading_text(keyword) for keyword in end_keywords}
 
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
-        if stripped in start_set:
+        heading = normalized_heading(stripped)
+        compact = compact_heading_text(heading or stripped)
+        if compact in start_set:
             collecting = True
             continue
-        if collecting and (stripped in end_set or (looks_like_heading(stripped) and stripped not in start_set)):
+        if collecting and (compact in end_set or (heading and compact not in start_set)):
             break
         if collecting:
             results.append(stripped)
@@ -331,13 +355,37 @@ def looks_like_work_history_line(line, date_range_pattern):
 def infer_work_experience_lines(lines, date_range_pattern):
     """Fallback for PDFs where the work-history heading is missing or glued to a row."""
     inferred = []
+    current_section = ""
     for line in lines:
-        if not looks_like_work_history_line(line, date_range_pattern):
+        heading = normalized_heading(line)
+        if heading:
+            current_section = SECTION_ALIASES.get(heading, "")
             continue
-        if "项目" in line and not any(keyword in line for keyword in ("公司", "集团", "科技", "咨询", "有限", "股份")):
+        if current_section == "project_experience":
+            continue
+        if "项目" in line and current_section != "work_experience":
+            continue
+        if not looks_like_work_history_line(line, date_range_pattern):
             continue
         inferred.append(line[:140])
     return list(dict.fromkeys(inferred))
+
+
+def looks_like_project_timeline_line(line):
+    project_terms = (
+        "项目", "系统", "平台", "中台", "报送", "集市", "数仓", "风控",
+        "预测性", "生产数据", "经营分析", "数据整合", "数据支撑",
+    )
+    company_terms = ("有限公司", "股份", "集团", "科技", "软件", "信息", "咨询")
+    role_terms = ("工程师", "开发", "分析师", "顾问", "经理")
+    if "项目" in line:
+        return True
+    if any(term in line for term in project_terms) and not (
+        any(term in line for term in company_terms) and any(term in line for term in role_terms) and len(line) < 45
+    ):
+        return True
+    return False
+
 
 def parse_resume(text, input_name=None, filename=None):
     """Parse resume text into structured fields used by the risk rules."""
@@ -389,10 +437,10 @@ def parse_resume(text, input_name=None, filename=None):
     if exp_match:
         result["work_years"] = exp_match.group(1)
 
-    if "项目经历" in lines:
+    if any(normalized_heading(line) in {"项目经历", "项目经验"} for line in lines):
         prefix = []
         for line in lines:
-            if line == "项目经历":
+            if normalized_heading(line) in {"项目经历", "项目经验"}:
                 break
             prefix.append(line)
         result["text_before_project"] = "\n".join(prefix)
@@ -400,7 +448,7 @@ def parse_resume(text, input_name=None, filename=None):
     education_section = extract_section_lines(
         lines,
         ["教育背景", "教育经历"],
-        ["工作经历", "项目经历", "专业技能", "个人技能", "个人优势", "个人评价"],
+        ["工作经历", "工作经验", "任职经历", "项目经历", "项目经验", "专业技能", "个人技能", "技术专长", "技能栈", "个人优势", "个人评价", "自我评价"],
     )
     education_keywords = ("大学", "学院", "学校", "本科", "硕士", "博士", "大专", "中专", "研究生")
     date_range_pattern = re.compile(
@@ -416,8 +464,8 @@ def parse_resume(text, input_name=None, filename=None):
 
     work_section = extract_section_lines(
         lines,
-        ["工作经历", "任职经历"],
-        ["项目经历", "专业技能", "个人技能", "教育背景", "教育经历", "个人优势", "个人评价"],
+        ["工作经历", "工作经验", "任职经历"],
+        ["项目经历", "项目经验", "专业技能", "个人技能", "技术专长", "技能栈", "教育背景", "教育经历", "个人优势", "个人评价", "自我评价"],
     )
     work_lines = []
     for line in work_section:
@@ -432,14 +480,14 @@ def parse_resume(text, input_name=None, filename=None):
 
     result["project_experience"] = extract_section_lines(
         lines,
-        ["项目经历"],
-        ["专业技能", "个人技能", "教育背景", "教育经历", "个人优势", "个人评价"],
+        ["项目经历", "项目经验"],
+        ["专业技能", "个人技能", "技术专长", "技能栈", "教育背景", "教育经历", "工作经历", "工作经验", "任职经历", "个人优势", "个人评价", "自我评价"],
     )
 
     skill_section = extract_section_lines(
         lines,
         ["专业技能", "个人技能", "技术专长", "擅长", "技能栈"],
-        ["项目经历", "教育背景", "教育经历", "工作经历", "任职经历", "个人优势", "个人评价"],
+        ["项目经历", "项目经验", "教育背景", "教育经历", "工作经历", "工作经验", "任职经历", "个人优势", "个人评价", "自我评价"],
     )
     skill_lines = []
     for line in skill_section:
@@ -612,7 +660,11 @@ def analyze_risk(resume_data):
     if any(major in text[:500] or major in edu_text[:400] for major in cs_majors):
         risks["professional_match"] = risk_bucket()
 
-    work_ranges = extract_date_ranges(work_exp)
+    all_work_ranges = extract_date_ranges(work_exp)
+    work_ranges = [
+        item for item in all_work_ranges
+        if not looks_like_project_timeline_line(item[2])
+    ]
     if len(work_ranges) >= 2:
         ordered_ranges = sorted(work_ranges, key=lambda item: item[0])
         latest_end = ordered_ranges[0][1]
@@ -716,7 +768,7 @@ def analyze_risk(resume_data):
             "未识别到明确的工作经历时间线",
             "；".join(parse_quality.get("warnings", [])) or raw_text[:180],
         )
-    elif len(work_ranges) == 0 and len(text) > 1500:
+    elif len(all_work_ranges) == 0 and len(text) > 1500:
         add_risk(
             risks,
             "work_experience",

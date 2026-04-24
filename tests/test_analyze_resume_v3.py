@@ -80,3 +80,65 @@ def test_folder_scan_can_be_limited_to_top_level():
 
     assert {Path(item["filepath"]).name for item in recursive} == {"top.pdf", "child.pdf"}
     assert {Path(item["filepath"]).name for item in top_level} == {"top.pdf"}
+
+
+def test_colon_section_headings_are_parsed():
+    module = load_module()
+    parsed = module.parse_resume(
+        """
+        王五
+        工作经历：
+        2021.08-2023.12 测试科技有限公司 数据开发工程师
+        项目经历：
+        客户经营分析平台 2022.01-2022.12
+        专业技能：
+        SQL、Hive、Python
+        """,
+        "王五",
+        "王五.pdf",
+    )
+
+    assert parsed["work_experience"] == ["2021.08-2023.12 测试科技有限公司 数据开发工程师"]
+    assert parsed["project_experience"]
+    assert parsed["skills"] == ["SQL、Hive、Python"]
+
+
+def test_project_lines_are_not_inferred_as_work_history():
+    module = load_module()
+    parsed = module.parse_resume(
+        """
+        赵六
+        项目经历
+        2023-11 ~ 2024-06 邢台家乐园集团超市有限责任公司数据中台 数据开发工程师
+        项目职责：负责ODS、DWD建模。
+        专业技能
+        SQL、Hive、Kettle
+        """,
+        "赵六",
+        "赵六.pdf",
+    )
+
+    assert parsed["work_experience"] == []
+    assert parsed["project_experience"]
+
+
+def test_project_timeline_lines_do_not_trigger_work_overlap():
+    module = load_module()
+    analyzed = module.analyze_risk(
+        {
+            "name": "钱七",
+            "filename": "钱七.pdf",
+            "raw_text": "钱七",
+            "clean_text": "钱七",
+            "education": ["2018.09-2022.06 测试大学 计算机 本科"],
+            "skills": ["SQL、Hive"],
+            "project_experience": [],
+            "work_experience": [
+                "2021.01-2024.12 测试科技有限公司 数据开发工程师",
+                "2023.02~2024.10 广发银行星轨个贷风控系统开发",
+                "2022.07-2023.08 银川隆基锂电池生产数据整合与分析支撑项目 数据开发工程师",
+            ],
+        }
+    )
+
+    assert analyzed["risks"]["timeline"]["flags"] == []
