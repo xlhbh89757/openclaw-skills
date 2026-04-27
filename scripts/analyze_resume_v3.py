@@ -499,6 +499,39 @@ def parse_resume(text, input_name=None, filename=None):
     return result
 
 
+def safe_debug_filename(value, fallback="resume"):
+    stem = Path(value or fallback).stem
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", stem).strip(" ._")
+    return stem or fallback
+
+
+def write_extraction_debug_files(parsed, output_dir, index):
+    """Write raw extracted text and parsed sections for manual extraction review."""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    stem = safe_debug_filename(parsed.get("filename") or parsed.get("name"), f"resume-{index}")
+    prefix = f"{index:03d}-{stem}"
+    text_path = output_path / f"{prefix}.txt"
+    sections_path = output_path / f"{prefix}.sections.json"
+
+    text_path.write_text(parsed.get("raw_text", ""), encoding="utf-8")
+    sections = {
+        "name": parsed.get("name", ""),
+        "filename": parsed.get("filename", ""),
+        "text_length": len(parsed.get("raw_text", "")),
+        "parse_quality": parsed.get("parse_quality", {}),
+        "sections": {
+            "education": parsed.get("education", []),
+            "work_experience": parsed.get("work_experience", []),
+            "project_experience": parsed.get("project_experience", []),
+            "skills": parsed.get("skills", []),
+        },
+    }
+    sections_path.write_text(json.dumps(sections, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"text": str(text_path), "sections": str(sections_path)}
+
+
 def analyze_risk(resume_data):
     """分析简历风险,返回风险评估结果"""
     risks = {
@@ -1037,6 +1070,13 @@ def main():
     parser.add_argument('--json', '-j', help='JSON格式的简历数据')
     parser.add_argument('--output', '-o', default=None, help='输出文件路径')
     parser.add_argument('--no-recursive', action='store_true', help='仅扫描指定文件夹,不递归子文件夹')
+    parser.add_argument('--debug-dir', help='保存抽取原文和解析分区诊断文件的目录')
+    parser.add_argument(
+        '--save-extracted-text',
+        nargs='?',
+        const='extraction_debug',
+        help='保存每份简历的抽取文本和章节分区诊断文件；可选指定输出目录'
+    )
 
     args = parser.parse_args()
 
@@ -1086,11 +1126,15 @@ def main():
 
     # 解析和分析简历
     results = []
-    for resume in resumes_data:
+    debug_dir = args.debug_dir or args.save_extracted_text
+    debug_files = []
+    for index, resume in enumerate(resumes_data, 1):
         text = resume.get('text', resume.get('content', '')) if isinstance(resume, dict) else str(resume)
         name = resume.get('name') if isinstance(resume, dict) else None
         filename = resume.get('filename') if isinstance(resume, dict) else None
         parsed = parse_resume(text, name, filename)
+        if debug_dir:
+            debug_files.append(write_extraction_debug_files(parsed, debug_dir, index))
         analyzed = analyze_risk(parsed)
         results.append(analyzed)
 
@@ -1114,6 +1158,8 @@ def main():
         'high_risk': len([r for r in results if r['overall'] == '高']),
         'medium_risk': len([r for r in results if r['overall'] == '中']),
         'low_risk': len([r for r in results if r['overall'] == '低']),
+        'debug_dir': str(Path(debug_dir)) if debug_dir else None,
+        'debug_files': debug_files,
         'details': [
             {
                 'name': r['name'],

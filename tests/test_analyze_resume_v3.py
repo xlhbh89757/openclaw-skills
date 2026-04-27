@@ -142,3 +142,37 @@ def test_project_timeline_lines_do_not_trigger_work_overlap():
     )
 
     assert analyzed["risks"]["timeline"]["flags"] == []
+
+
+def test_extraction_debug_files_include_raw_text_and_sections():
+    module = load_module()
+    parsed = module.parse_resume(
+        """
+        孙八
+        教育背景
+        2016.09-2020.06 测试大学 计算机 本科
+        工作经历
+        2020.07-2024.01 测试科技有限公司 数据开发工程师
+        项目经历
+        客户经营分析平台 负责数据建模
+        专业技能
+        SQL、Hive、Python
+        """,
+        "孙八",
+        "数据开发-孙八.pdf",
+    )
+    output_dir = TEST_TMP / f"debug-{uuid4().hex}"
+
+    written = module.write_extraction_debug_files(parsed, output_dir, 1)
+
+    raw_path = output_dir / "001-数据开发-孙八.txt"
+    sections_path = output_dir / "001-数据开发-孙八.sections.json"
+    assert written == {"text": str(raw_path), "sections": str(sections_path)}
+    assert "测试科技有限公司" in raw_path.read_text(encoding="utf-8")
+
+    import json
+
+    sections = json.loads(sections_path.read_text(encoding="utf-8"))
+    assert sections["filename"] == "数据开发-孙八.pdf"
+    assert sections["sections"]["work_experience"] == ["2020.07-2024.01 测试科技有限公司 数据开发工程师"]
+    assert sections["parse_quality"]["quality"] in {"正常", "需复核", "较差"}

@@ -42,6 +42,7 @@ C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_res
 ```bash
 python C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_resume_v3.py --folder "C:\Resumes"
 python C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_resume_v3.py --folder "C:\Resumes" --no-recursive
+python C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_resume_v3.py --folder "C:\Resumes" --debug-dir "C:\Resumes\extraction_debug"
 python C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_resume_v3.py --file "C:\Resumes\candidate.pdf"
 echo '[{"name":"张三","text":"简历正文"}]' | python C:\Users\EDY\.openclaw\workspace\skills\resume-risk-assessor\scripts\analyze_resume_v3.py
 ```
@@ -53,6 +54,7 @@ echo '[{"name":"张三","text":"简历正文"}]' | python C:\Users\EDY\.openclaw
 - 标准输出会返回 JSON，包含 `success`、`output`、`count`、风险分布和候选人摘要
 - Excel「风险总览」包含文件名、文本长度和解析质量，帮助区分真实风险和 PDF 抽取质量问题
 - Excel「详细分析」包含「触发原文」，用于快速复核每个风险点的原文依据
+- `--debug-dir` / `--save-extracted-text` 会为每份简历保存抽取原文 `.txt` 和章节分区 `.sections.json`，用于定位“解析复核”样本到底是抽取问题、分区问题还是规则问题。
 
 ## Review Guidance
 
@@ -80,6 +82,7 @@ echo '[{"name":"张三","text":"简历正文"}]' | python C:\Users\EDY\.openclaw
 
 ## Changelog
 
+- **v7 (2026-04-27)**：新增抽取诊断输出，支持 `--debug-dir` 和 `--save-extracted-text`，批量保存每份简历的抽取文本和结构化章节结果，便于复核 PDF 抽取失败导致的中风险误报。
 - **v6 (2026-04-24)**：优化章节标题识别，支持冒号、空格和常见别名；工作时间线判断会过滤项目 / 系统 / 平台类时间段，减少项目经历被误判为工作经历重叠的问题。在 `E:\简历` 130 份样本上复测，中风险从 54 降至 48。
 - **v5 (2026-04-23)**：报告新增触发原文证据列、文本长度和解析质量字段；`--folder` 默认递归扫描并支持 `--no-recursive`；风险对象保留 evidence，便于复核和后续系统集成。
 - **v4 (2026-04-23)**：技能夸大判定从简单关键词计数改为上下文感知模式——结合工作年限减免、项目证据支撑度，避免对经验丰富的候选人误判。新增 AI 复核步骤建议。
