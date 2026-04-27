@@ -1060,6 +1060,37 @@ def process_resume_file(filepath, filename=None):
     }
 
 
+def resolve_output_locations(output_arg=None, folder_arg=None, file_arg=None, debug_arg=None, save_extracted_text=None):
+    """Resolve report and debug paths relative to the evaluated resume location."""
+    if folder_arg:
+        base_dir = Path(folder_arg)
+    elif file_arg:
+        base_dir = Path(file_arg).parent
+    else:
+        base_dir = Path.cwd()
+
+    if output_arg:
+        output_path = Path(output_arg)
+        if not output_path.is_absolute():
+            output_path = base_dir / output_path
+    elif folder_arg or file_arg:
+        output_path = base_dir / 'resume_risk_report.xlsx'
+    else:
+        output_path = Path('resume_risk_report.xlsx')
+
+    debug_source = debug_arg
+    if debug_source is None and save_extracted_text is not None:
+        debug_source = save_extracted_text
+
+    debug_path = None
+    if debug_source:
+        debug_path = Path(debug_source)
+        if not debug_path.is_absolute():
+            debug_path = base_dir / debug_path
+
+    return str(output_path), str(debug_path) if debug_path else None
+
+
 def main():
     """主函数"""
     import argparse
@@ -1124,9 +1155,16 @@ def main():
             parser.print_help()
             sys.exit(0)
 
+    output_path, debug_dir = resolve_output_locations(
+        output_arg=args.output,
+        folder_arg=args.folder,
+        file_arg=args.file,
+        debug_arg=args.debug_dir,
+        save_extracted_text=args.save_extracted_text,
+    )
+
     # 解析和分析简历
     results = []
-    debug_dir = args.debug_dir or args.save_extracted_text
     debug_files = []
     for index, resume in enumerate(resumes_data, 1):
         text = resume.get('text', resume.get('content', '')) if isinstance(resume, dict) else str(resume)
@@ -1139,14 +1177,6 @@ def main():
         results.append(analyzed)
 
     # 生成Excel报告
-    if args.output:
-        output_path = args.output
-    elif args.folder:
-        output_path = str(Path(args.folder) / 'resume_risk_report.xlsx')
-    elif args.file:
-        output_path = str(Path(args.file).parent / 'resume_risk_report.xlsx')
-    else:
-        output_path = 'resume_risk_report.xlsx'
     if HAS_OPENPYXL:
         create_excel_report(results, output_path)
 

@@ -176,3 +176,35 @@ def test_extraction_debug_files_include_raw_text_and_sections():
     assert sections["filename"] == "数据开发-孙八.pdf"
     assert sections["sections"]["work_experience"] == ["2020.07-2024.01 测试科技有限公司 数据开发工程师"]
     assert sections["parse_quality"]["quality"] in {"正常", "需复核", "较差"}
+
+
+def test_relative_report_and_debug_paths_resolve_under_folder():
+    module = load_module()
+    folder = Path(r"E:\简历")
+
+    output_path, debug_dir = module.resolve_output_locations(
+        output_arg="custom_report.xlsx",
+        folder_arg=str(folder),
+        file_arg=None,
+        debug_arg=None,
+        save_extracted_text="extraction_debug",
+    )
+
+    assert output_path == str(folder / "custom_report.xlsx")
+    assert debug_dir == str(folder / "extraction_debug")
+
+
+def test_default_report_path_resolves_under_single_file_parent():
+    module = load_module()
+    file_path = Path(r"E:\简历\数据岗-1.20\candidate.pdf")
+
+    output_path, debug_dir = module.resolve_output_locations(
+        output_arg=None,
+        folder_arg=None,
+        file_arg=str(file_path),
+        debug_arg="debug",
+        save_extracted_text=None,
+    )
+
+    assert output_path == str(file_path.parent / "resume_risk_report.xlsx")
+    assert debug_dir == str(file_path.parent / "debug")
