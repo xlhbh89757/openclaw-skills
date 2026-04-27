@@ -51,10 +51,39 @@ echo '[{"name":"张三","text":"简历正文"}]' | python C:\Users\EDY\.openclaw
 
 - 默认输出文件名：`resume_risk_report.xlsx`
 - 输出位置：评估文件夹下；单文件评估时输出到该文件所在目录。`--output` 如果传相对路径，也会相对评估目录解析。
-- 标准输出会返回 JSON，包含 `success`、`output`、`count`、风险分布和候选人摘要
+- 标准输出会返回 JSON，包含 `success`、`output`、`count`、风险分布、候选人摘要和 `summary_stats`
 - Excel「风险总览」包含文件名、文本长度和解析质量，帮助区分真实风险和 PDF 抽取质量问题
 - Excel「详细分析」包含「触发原文」，用于快速复核每个风险点的原文依据
 - `--debug-dir` / `--save-extracted-text` 会为每份简历保存抽取原文 `.txt` 和章节分区 `.sections.json`，相对路径同样写到评估目录下，用于定位“解析复核”样本到底是抽取问题、分区问题还是规则问题。
+
+## Response Requirements
+
+运行脚本后，不要只回复“报告已生成”。必须读取标准输出 JSON 中的 `summary_stats`，并在回复里给出信息总览：
+
+```text
+评估完成：共 {count} 份简历。
+
+风险分布：
+- 高风险：{high}
+- 中风险：{medium}
+- 低风险：{low}
+
+解析质量：
+- 正常：{normal}
+- 需复核：{review}
+- 较差：{poor}
+
+主要中风险维度：
+- {dimension}: {count}
+
+判断：
+本报告适合初筛排序，不适合直接作为真实性结论。中风险中有 {medium_with_parse_issue} 条解析质量为“较差/需复核”，建议先看原 PDF 或抽取诊断文件。
+
+报告：{output}
+诊断目录：{debug_dir}
+```
+
+如果 `summary_stats` 缺失，先从 Excel 或 JSON details 中补算以上总览，再回复用户。
 
 ## Review Guidance
 
@@ -82,6 +111,7 @@ echo '[{"name":"张三","text":"简历正文"}]' | python C:\Users\EDY\.openclaw
 
 ## Changelog
 
+- **v8 (2026-04-27)**：标准 JSON 输出新增 `summary_stats`，包含风险分布、解析质量分布、中风险维度、解析驱动中风险和重点复核候选人；递归扫描会跳过 `*_extraction_debug` 等诊断目录，避免把生成的 `.txt` 当成简历重复评估；skill 回复要求新增信息总览模板。
 - **v7.1 (2026-04-27)**：统一报告和诊断目录的相对路径解析，默认写入被评估简历所在目录，避免输出散落到命令执行目录。
 - **v7 (2026-04-27)**：新增抽取诊断输出，支持 `--debug-dir` 和 `--save-extracted-text`，批量保存每份简历的抽取文本和结构化章节结果，便于复核 PDF 抽取失败导致的中风险误报。
 - **v6 (2026-04-24)**：优化章节标题识别，支持冒号、空格和常见别名；工作时间线判断会过滤项目 / 系统 / 平台类时间段，减少项目经历被误判为工作经历重叠的问题。在 `E:\简历` 130 份样本上复测，中风险从 54 降至 48。

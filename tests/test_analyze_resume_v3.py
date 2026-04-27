@@ -82,6 +82,23 @@ def test_folder_scan_can_be_limited_to_top_level():
     assert {Path(item["filepath"]).name for item in top_level} == {"top.pdf"}
 
 
+def test_folder_scan_skips_generated_debug_directories():
+    module = load_module()
+    root = TEST_TMP / f"scan-debug-{uuid4().hex}"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "candidate.pdf").write_text("candidate", encoding="utf-8")
+    debug = root / "resume_extraction_debug"
+    debug.mkdir()
+    (debug / "001-candidate.txt").write_text("debug text", encoding="utf-8")
+    custom_debug = root / "custom_extraction_debug"
+    custom_debug.mkdir()
+    (custom_debug / "002-candidate.txt").write_text("debug text", encoding="utf-8")
+
+    scanned = module.scan_resumes_folder(root)
+
+    assert {Path(item["filepath"]).name for item in scanned} == {"candidate.pdf"}
+
+
 def test_colon_section_headings_are_parsed():
     module = load_module()
     parsed = module.parse_resume(
@@ -208,3 +225,41 @@ def test_default_report_path_resolves_under_single_file_parent():
 
     assert output_path == str(file_path.parent / "resume_risk_report.xlsx")
     assert debug_dir == str(file_path.parent / "debug")
+
+
+def test_build_summary_stats_includes_overview_fields():
+    module = load_module()
+    results = [
+        {
+            "name": "甲",
+            "filename": "甲.pdf",
+            "overall": "中",
+            "summary": "[工作经历]中",
+            "parse_quality": {"quality": "较差"},
+            "risks": {
+                "work_experience": {"level": "中", "flags": ["未识别到工作经历"], "evidence": []},
+                "skill_exaggeration": {"level": "低", "flags": [], "evidence": []},
+            },
+        },
+        {
+            "name": "乙",
+            "filename": "乙.pdf",
+            "overall": "中",
+            "summary": "[技能夸大]中",
+            "parse_quality": {"quality": "正常"},
+            "risks": {
+                "work_experience": {"level": "低", "flags": [], "evidence": []},
+                "skill_exaggeration": {"level": "中", "flags": ["技能措辞偏强"], "evidence": []},
+            },
+        },
+    ]
+
+    stats = module.build_summary_stats(results, output_path="E:\\简历\\resume_risk_report.xlsx", debug_dir="E:\\简历\\debug")
+
+    assert stats["risk_distribution"]["中"] == 2
+    assert stats["parse_quality_distribution"]["较差"] == 1
+    assert stats["medium_with_parse_issue"] == 1
+    assert stats["medium_risk_by_dimension"]["工作经历"] >= 1
+    assert stats["output_files"]["report"] == "E:\\简历\\resume_risk_report.xlsx"
+    assert stats["output_files"]["debug_dir"] == "E:\\简历\\debug"
+    assert stats["top_medium_candidates"][0]["name"] == "乙"

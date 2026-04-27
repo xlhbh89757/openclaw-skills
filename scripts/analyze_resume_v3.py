@@ -1002,6 +1002,69 @@ def create_excel_report(results, output_path):
     return output_path
 
 
+def build_summary_stats(results, output_path=None, debug_dir=None):
+    risk_distribution = {level: 0 for level in RISK_LEVELS}
+    parse_quality_distribution = {}
+    medium_risk_by_dimension = {}
+    medium_with_parse_issue = 0
+    top_medium_candidates = []
+
+    for result in results:
+        overall = result.get("overall", "低")
+        risk_distribution[overall] = risk_distribution.get(overall, 0) + 1
+
+        parse_quality = result.get("parse_quality") or {}
+        quality = parse_quality.get("quality") or "未知"
+        parse_quality_distribution[quality] = parse_quality_distribution.get(quality, 0) + 1
+
+        if overall == "中":
+            if quality in {"较差", "需复核"}:
+                medium_with_parse_issue += 1
+            top_medium_candidates.append({
+                "name": result.get("name", ""),
+                "filename": result.get("filename", ""),
+                "summary": result.get("summary", ""),
+                "parse_quality": quality,
+            })
+
+        for dimension, data in result.get("risks", {}).items():
+            if data.get("level") == "中" and data.get("flags"):
+                label = RISK_DIMENSION_LABELS.get(dimension, dimension)
+                medium_risk_by_dimension[label] = medium_risk_by_dimension.get(label, 0) + len(data["flags"])
+
+    top_medium_candidates.sort(key=lambda item: 0 if item["parse_quality"] == "正常" else 1)
+
+    return {
+        "risk_distribution": risk_distribution,
+        "parse_quality_distribution": parse_quality_distribution,
+        "medium_with_parse_issue": medium_with_parse_issue,
+        "medium_risk_by_dimension": dict(sorted(
+            medium_risk_by_dimension.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )),
+        "top_medium_candidates": top_medium_candidates[:10],
+        "output_files": {
+            "report": output_path,
+            "debug_dir": debug_dir,
+        },
+        "usage_note": "本报告适合初筛排序和人工复核，不适合直接作为简历真实性结论。",
+    }
+
+
+def should_skip_resume_path(file_path):
+    ignored_dir_suffixes = (
+        "extraction_debug",
+        "resume_extraction_debug",
+        "markitdown_extraction_debug",
+    )
+    for part in file_path.parts:
+        lower = part.lower()
+        if lower == "__pycache__" or any(lower.endswith(suffix) for suffix in ignored_dir_suffixes):
+            return True
+    return False
+
+
 def scan_resumes_folder(folder_path, recursive=True):
     """扫描文件夹中的所有简历文件,支持递归遍历子文件夹"""
     supported_extensions = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.txt']
@@ -1015,6 +1078,8 @@ def scan_resumes_folder(folder_path, recursive=True):
     if recursive:
         # 递归遍历所有子文件夹
         for file_path in folder.rglob('*'):
+            if should_skip_resume_path(file_path):
+                continue
             if file_path.is_file():
                 ext = file_path.suffix.lower()
                 if ext in supported_extensions:
@@ -1030,6 +1095,8 @@ def scan_resumes_folder(folder_path, recursive=True):
         # 只扫描当前文件夹
         for ext in supported_extensions:
             for file_path in folder.glob(f'*{ext}'):
+                if should_skip_resume_path(file_path):
+                    continue
                 if file_path.name.startswith('~$'):
                     continue
                 if any(keyword in file_path.stem for keyword in ignored_name_keywords):
@@ -1180,6 +1247,8 @@ def main():
     if HAS_OPENPYXL:
         create_excel_report(results, output_path)
 
+    summary_stats = build_summary_stats(results, output_path=output_path, debug_dir=debug_dir)
+
     # 输出JSON结果
     output = {
         'success': True,
@@ -1190,6 +1259,7 @@ def main():
         'low_risk': len([r for r in results if r['overall'] == '低']),
         'debug_dir': str(Path(debug_dir)) if debug_dir else None,
         'debug_files': debug_files,
+        'summary_stats': summary_stats,
         'details': [
             {
                 'name': r['name'],
